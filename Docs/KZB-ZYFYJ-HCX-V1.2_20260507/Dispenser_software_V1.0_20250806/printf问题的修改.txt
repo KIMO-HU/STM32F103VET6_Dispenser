@@ -1,0 +1,46 @@
+printf问题导致死机。
+修改：
+1，在usart.c最后添加以下代码。代码见附属。注意里面用的是USART1根据需要修改。
+2，在stubs.c中去除原来 fputc。同时fputc已经在附属中修改增加。
+3，在kservice.c中将rt_kprintf函数修改为空操作。
+
+附属代码：
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+//加入以下代码,支持printf函数,而不需要选择use MicroLIB    
+#if 1
+#pragma import(__use_no_semihosting)             
+//标准库需要的支持函数                 
+struct __FILE 
+{ 
+    int handle; 
+}; 
+ 
+FILE __stdout;       
+//定义_sys_exit()以避免使用半主机模式    
+void _sys_exit(int x) 
+{ 
+    x = x; 
+} 
+//////////////////增加下面这个函数////////////
+//__use_no_semihosting was requested, but _ttywrch was 
+void _ttywrch(int ch)
+{
+    ch = ch;
+}
+////增加上面这个函数///
+//重定义fputc函数 
+int fputc(int ch, FILE *f)
+{   /*
+    serialize8((u8)ch);
+    USART_ITConfig(USART1, USART_IT_TXE, ENABLE);   //开启发送中断
+    return ch;
+*/
+	while((USART1->SR&0X40)==0);//等待上一次串口数据发送完成    
+    USART1->DR = (u8) ch;        //写DR,串口1将发送数据  
+    return ch;  
+
+}
+#endif
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+

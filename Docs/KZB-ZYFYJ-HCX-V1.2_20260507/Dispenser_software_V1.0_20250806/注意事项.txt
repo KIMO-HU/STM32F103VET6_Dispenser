@@ -1,0 +1,11 @@
+1，NC变化。
+2，R257  IDATABKP,
+   R224  IDATA,
+   R247,IDATA1.
+3，RCS   no
+4,通信包头
+5，EEPROM_WriteBytes等已经修改，需要恢复
+6, 相关修改
+    // 初始化消息队列
+    msg_queue_init(); 
+7,37 BA   ==>   55  BB

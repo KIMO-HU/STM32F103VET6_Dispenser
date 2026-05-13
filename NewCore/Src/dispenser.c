@@ -1,0 +1,338 @@
+/**
+  ******************************************************************************
+  * @file    dispenser.c
+  * @brief   中药机出药控制逻辑
+  * @note    基于裸机轮询架构，替代原有 RT-Thread 多线程实现
+  ******************************************************************************
+  */
+
+#include "dispenser.h"
+#include "gpio_ctrl.h"
+#include "system_clock.h"
+#include "protocol_sac.h"
+
+/* 全局变量 */
+disp_params_t g_disp_params = {
+    .target_weight     = 0,
+    .current_weight    = 0,
+    .high_speed        = 0x06FF,
+    .mid_speed         = 0x05FF,
+    .low_speed         = 0x04FF,
+    .speed_percent     = 50,
+    .door_time         = 5,
+    .timeout           = 255,
+    .auger_check_time  = 3000,
+    .auger_weight_diff = 1,
+    .low_weight_thresh = 0,
+    .cali_high_weight  = 500,
+    .cali_zero_weight  = 0,
+    .stir_speed        = 2,
+    .board_id          = 1,
+    .machine_id        = 1,
+};
+
+disp_status_t g_disp_status = DISP_IDLE;
+
+volatile uint8_t g_dispense_cmd    = 0;
+volatile uint8_t g_emergency_stop  = 0;
+volatile uint8_t g_door_open_cmd   = 0;
+volatile uint8_t g_vibrate_cmd     = 0;
+
+/* 内部状态 */
+static uint32_t s_dispense_start_time = 0;
+static uint32_t s_last_auger_check    = 0;
+static uint16_t s_last_weight         = 0;
+static uint8_t  s_door_is_open        = 0;
+static uint32_t s_door_open_time      = 0;
+
+/**
+  * @brief  初始化 dispenser
+  */
+void DISPENSER_Init(void)
+{
+    g_disp_status = DISP_IDLE;
+    g_dispense_cmd = 0;
+    g_emergency_stop = 0;
+
+    /* 所有电机停止 */
+    MOTOR_DC1_Set(0, 0);
+    MOTOR_DC2_Set(0, 0);
+    MOTOR_DC3_Set(0, 0);
+    MOTOR_DC4_Set(0, 0);
+    AUGER_S_Set(0, 0, 1);  /* 小绞龙停止+刹车 */
+    AUGER_B_Set(0, 0, 1);  /* 大绞龙停止+刹车 */
+}
+
+/**
+  * @brief  主处理循环 (需在 main loop 中周期性调用)
+  */
+void DISPENSER_Process(void)
+{
+    /* 急停处理 (最高优先级) */
+    if (g_emergency_stop) {
+        DISPENSER_EmergencyStop();
+        g_emergency_stop = 0;
+        return;
+    }
+
+    /* 手动开门 */
+    if (g_door_open_cmd) {
+        g_door_open_cmd = 0;
+        DISPENSER_DoorOpen();
+        return;
+    }
+
+    /* 手动振动 */
+    if (g_vibrate_cmd) {
+        g_vibrate_cmd = 0;
+        DISPENSER_Vibrate();
+        return;
+    }
+
+    /* 一键清空 */
+    if (g_dispense_cmd == 0xFF) {
+        g_dispense_cmd = 0;
+        DISPENSER_Clear();
+        return;
+    }
+
+    /* 正常出药流程 */
+    if (g_dispense_cmd && (g_disp_status == DISP_IDLE)) {
+        g_dispense_cmd = 0;
+        DISPENSER_Start(g_disp_params.target_weight);
+    }
+
+    /* 出药状态机 */
+    if (g_disp_status != DISP_IDLE) {
+        uint32_t elapsed = sysTickCount - s_dispense_start_time;
+
+        /* 超时检测 */
+        if (elapsed > (uint32_t)g_disp_params.timeout * 1000) {
+            DISPENSER_Stop();
+            g_disp_status = DISP_TIMEOUT;
+            return;
+        }
+
+        /* 读取当前重量 (此处为模拟/框架，实际应调用 ADS1256 驱动) */
+        g_disp_params.current_weight = DISPENSER_GetWeight();
+
+        /* 出药完成检测 */
+        if (g_disp_params.current_weight >= g_disp_params.target_weight) {
+            DISPENSER_Stop();
+            g_disp_status = DISP_IDLE;
+            return;
+        }
+
+        /* 速度切换逻辑 (简化版) */
+        uint16_t remaining = g_disp_params.target_weight - g_disp_params.current_weight;
+        if (remaining <= g_disp_params.low_weight_thresh) {
+            if (g_disp_status != DISP_LOW_SPEED) {
+                g_disp_status = DISP_LOW_SPEED;
+                /* 小绞龙低速运行 */
+                AUGER_S_Set(1, 0, 0);
+            }
+        } else if (remaining <= (g_disp_params.target_weight * g_disp_params.speed_percent / 100)) {
+            if (g_disp_status != DISP_MID_SPEED) {
+                g_disp_status = DISP_MID_SPEED;
+                /* 大小绞龙中速运行 */
+                AUGER_S_Set(1, 0, 0);
+                AUGER_B_Set(1, 0, 0);
+            }
+        } else {
+            if (g_disp_status != DISP_HIGH_SPEED) {
+                g_disp_status = DISP_HIGH_SPEED;
+                /* 大小绞龙高速运行 */
+                AUGER_S_Set(1, 0, 0);
+                AUGER_B_Set(1, 0, 0);
+            }
+        }
+
+        /* 防悬空电机周期性动作 (简化) */
+        if ((sysTickCount % 500) < 250) {
+            MOTOR_DC1_Set(1, 0);
+            MOTOR_DC2_Set(1, 0);
+        } else {
+            MOTOR_DC1_Set(0, 0);
+            MOTOR_DC2_Set(0, 0);
+        }
+    }
+
+    /* 料斗门自动关闭 */
+    if (s_door_is_open) {
+        if ((sysTickCount - s_door_open_time) > (uint32_t)g_disp_params.door_time * 1000) {
+            MOTOR_DC3_Set(0, 0);  /* 关门 */
+            s_door_is_open = 0;
+        }
+    }
+}
+
+/**
+  * @brief  开始出药
+  */
+void DISPENSER_Start(uint16_t weight)
+{
+    if (g_disp_status != DISP_IDLE) return;
+
+    g_disp_params.target_weight = weight;
+    g_disp_status = DISP_HIGH_SPEED;
+    s_dispense_start_time = sysTickCount;
+    s_last_auger_check = sysTickCount;
+    s_last_weight = 0;
+
+    /* 打开门 */
+    MOTOR_DC3_Set(1, 0);
+    s_door_is_open = 1;
+    s_door_open_time = sysTickCount;
+
+    /* 启动大绞龙高速 */
+    AUGER_B_Set(1, 0, 0);
+    /* 启动小绞龙 (颗粒型才需要，此处简化) */
+    AUGER_S_Set(1, 0, 0);
+}
+
+/**
+  * @brief  停止出药
+  */
+void DISPENSER_Stop(void)
+{
+    MOTOR_DC1_Set(0, 0);
+    MOTOR_DC2_Set(0, 0);
+    MOTOR_DC3_Set(0, 0);
+    MOTOR_DC4_Set(0, 0);
+    AUGER_S_Set(0, 0, 1);
+    AUGER_B_Set(0, 0, 1);
+
+    if (g_disp_status != DISP_TIMEOUT) {
+        g_disp_status = DISP_IDLE;
+    }
+}
+
+/**
+  * @brief  急停
+  */
+void DISPENSER_EmergencyStop(void)
+{
+    DISPENSER_Stop();
+    g_disp_status = DISP_IDLE;
+    g_dispense_cmd = 0;
+}
+
+/**
+  * @brief  手动开门
+  */
+void DISPENSER_DoorOpen(void)
+{
+    MOTOR_DC3_Set(1, 0);
+    s_door_is_open = 1;
+    s_door_open_time = sysTickCount;
+}
+
+/**
+  * @brief  手动振动 (启动防悬空电机)
+  */
+void DISPENSER_Vibrate(void)
+{
+    MOTOR_DC1_Set(1, 0);
+    MOTOR_DC2_Set(1, 0);
+    delay_ms(500);
+    MOTOR_DC1_Set(0, 0);
+    MOTOR_DC2_Set(0, 0);
+}
+
+/**
+  * @brief  一键清空 (快速倒药)
+  */
+void DISPENSER_Clear(void)
+{
+    DISPENSER_Stop();
+    /* 打开门 */
+    MOTOR_DC3_Set(1, 0);
+    s_door_is_open = 1;
+    s_door_open_time = sysTickCount;
+    /* 启动绞龙反转排空 */
+    AUGER_B_Set(1, 1, 0);
+    delay_ms(3000);
+    DISPENSER_Stop();
+}
+
+/**
+  * @brief  获取状态字节
+  * @retval bit7: 门状态(1=关,0=开), bit3: 高料位, bit2: 中料位, bit1: 低料位, bit0: 缺料
+  */
+uint8_t DISPENSER_GetStatusByte(void)
+{
+    uint8_t status = 0;
+
+    /* 门状态: 0=开门, 1=关门 (协议规定) */
+    if (!s_door_is_open) status |= 0x80;
+
+    /* 料位传感器: 有料=0, 无料=1 (协议规定) */
+    if (SENSOR_ReadHigh()) status |= 0x08;  /* 高位无料 */
+    if (SENSOR_ReadMid())  status |= 0x04;  /* 中位无料 */
+    if (SENSOR_ReadLow())  status |= 0x02;  /* 低位无料 */
+    if (SENSOR_ReadLow())  status |= 0x01;  /* 缺料 = 低位无料 */
+
+    return status;
+}
+
+/**
+  * @brief  获取当前重量 (框架函数，待接入 ADS1256 驱动)
+  */
+uint16_t DISPENSER_GetWeight(void)
+{
+    /* TODO: 接入 ADS1256 24位ADC 读取称重传感器 */
+    /* 当前返回模拟值用于框架验证 */
+    return g_disp_params.current_weight;
+}
+
+/**
+  * @brief  设置参数
+  */
+void DISPENSER_SetParam(uint8_t param_type, uint8_t *data, uint16_t len)
+{
+    if (len < 1) return;
+
+    switch (param_type) {
+        case CFG_DATA_MEDCINE_SET:   /* 药量 */
+            if (len >= 2) g_disp_params.target_weight = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_SPEED_MODE_H_SET:   /* 高速 */
+            if (len >= 2) g_disp_params.high_speed = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_SPEED_MODE_M_SET:   /* 中速 */
+            if (len >= 2) g_disp_params.mid_speed = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_SPEED_MODE_L_SET:   /* 低速 */
+            if (len >= 2) g_disp_params.low_speed = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case SAMP_PERCENT_CFG_REQ:   /* 速度百分比 */
+            g_disp_params.speed_percent = data[0];
+            break;
+        case CFG_DOOR_TIME_REQ:      /* 开门时间 */
+            g_disp_params.door_time = data[0];
+            break;
+        case CFG_TIMEOUT_REQ:        /* 超时时间 */
+            g_disp_params.timeout = data[0];
+            break;
+        case CFG_AUGER_TIME_REQ:     /* 绞龙确认时间 */
+            if (len >= 2) g_disp_params.auger_check_time = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_AUGER_WEIGHT_REQ:   /* 绞龙差值 */
+            if (len >= 2) g_disp_params.auger_weight_diff = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_LOW_WEIGHT_REQ:     /* 花草型低速阈值 */
+            if (len >= 2) g_disp_params.low_weight_thresh = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_WEIGHT_HIGN_REQ:    /* 标定高重量 */
+            if (len >= 2) g_disp_params.cali_high_weight = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case CFG_WEIGHT_LOW_REQ:     /* 标定零重量 */
+            if (len >= 2) g_disp_params.cali_zero_weight = ((uint16_t)data[0] << 8) | data[1];
+            break;
+        case STIR_SPEED_REQ:         /* 搅拌速度 */
+            g_disp_params.stir_speed = data[0];
+            break;
+        default:
+            break;
+    }
+}

@@ -1,0 +1,30 @@
+# Build output
+build/
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+
+# IDE
+.vscode/
+.vs/
+*.uvprojx
+*.uvoptx
+*.uvguix.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.bak
+*~
+
+# Python venv (for doc extraction)
+doc_env/
+
+# Nested git repos (reference code)
+Docs/KZB-ZYFYJ-HCX-V1.2_20260507/Dispenser_software_V1.0_20250806/sourcecode/SED_900
