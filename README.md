@@ -15,7 +15,7 @@
 
 ```
 STM32F103VET6_Project/
-├── Core/
+├── DemoCore/
 │   ├── Inc/                    # 头文件
 │   │   └── stm32f1xx_it.h      # 中断服务程序声明
 │   └── Src/                    # 源代码

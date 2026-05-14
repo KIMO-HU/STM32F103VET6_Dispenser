@@ -73,7 +73,7 @@ java -jar ~/Downloads/SetupSTM32CubeMX-*.exe
 ## 4. 将 CubeMX 代码与现有项目整合
 
 ### 方法一: 直接替换（推荐新手）
-1. 删除当前项目的 `Core/Src` 和 `Core/Inc` 目录下的所有文件
+1. 删除当前项目的 `DemoCore/Src` 和 `DemoCore/Inc` 目录下的所有文件
 2. 复制 CubeMX 生成的 `Src/` 和 `Inc/` 目录内容到对应位置
 3. 修改 Makefile 添加 HAL 库路径和源文件
 

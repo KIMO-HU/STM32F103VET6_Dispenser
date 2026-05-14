@@ -12,6 +12,8 @@
 #include "stdint.h"
 #include "system_clock.h"
 #include "gpio_ctrl.h"
+#include "pwm_ctrl.h"
+#include "dac7512.h"
 #include "usart_ctrl.h"
 #include "protocol_sac.h"
 #include "dispenser.h"

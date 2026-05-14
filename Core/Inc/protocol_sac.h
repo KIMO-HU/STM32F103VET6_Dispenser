@@ -49,7 +49,7 @@ typedef enum {
 #define CFG_DOOR_OPEN_REQ           0x19    /* 手动开门指令 */
 #define CFG_VIBRATE_REQ             0x1A    /* 手动振动指令 */
 #define CFG_TIMEOUT_REQ             0x1B    /* 出药超时时间设置 */
-#define CFG_WEIGHT_HIGN_REQ         0x1C    /* 重量标定高重量设置 */
+#define CFG_WEIGHT_HIGH_REQ         0x1C    /* 重量标定高重量设置 */
 #define CFG_WEIGHT_LOW_REQ          0x1D    /* 重量标定零重量设置 */
 #define CFG_AUGER_TIME_REQ          0x1E    /* 绞龙重量确认时间间隔设置 */
 #define CFG_AUGER_WEIGHT_REQ        0x1F    /* 绞龙重量前后差值设置 */
@@ -79,7 +79,7 @@ typedef enum {
 #define SYS_IO_RSP                  0x81
 #define SYS_ID_RSP                  0x82
 #define SYS_TEMP_RSP                0x83
-#define MEDCIEN_START_RSP           0x84
+#define MEDICINE_START_RSP          0x84
 #define ACC_RPT_STOP_RSP            0x85
 #define SAMP_WEIGHT_RSP             0x86
 #define SAMP_PERCENT_CFG_RSP        0x87
@@ -98,7 +98,7 @@ typedef enum {
 #define CFG_DOOR_OPEN_RSP           0x99
 #define CFG_VIBRATE_RSP             0x9A
 #define CFG_TIMEOUT_RSP             0x9B
-#define CFG_WEIGHT_HIGN_RSP         0x9C
+#define CFG_WEIGHT_HIGH_RSP         0x9C
 #define CFG_WEIGHT_LOW_RSP          0x9D
 #define CFG_AUGER_TIME_RSP          0x9E
 #define CFG_AUGER_WEIGHT_RSP        0x9F

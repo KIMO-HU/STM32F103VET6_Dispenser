@@ -67,23 +67,23 @@
 #define DC3_IN2_PIN             GPIO_Pin_1      /* PB1 */
 #define DC3_GPIO                GPIOB
 
-/* DC4: 入药电机 */
-#define DC4_IN1_PIN             GPIO_Pin_14     /* PD14 */
-#define DC4_IN2_PIN             GPIO_Pin_15     /* PD15 */
+/* DC4: 入药电机 -- 与旧版一致 */
+#define DC4_IN1_PIN             GPIO_Pin_8      /* PD8 */
+#define DC4_IN2_PIN             GPIO_Pin_9      /* PD9 */
 #define DC4_GPIO                GPIOD
 
 /* ========================================================================
    绞龙驱动控制引脚 (BLDC 驱动器接口)
    ======================================================================== */
-/* 小绞龙 (Small Auger) */
-#define S_EN_PIN                GPIO_Pin_2      /* PA2: 使能 */
+/* 小绞龙 (Small Auger) -- 与旧版软件保持一致 */
+#define S_EN_PIN                GPIO_Pin_10     /* PA10: 使能 (旧版定义) */
 #define S_FR_PIN                GPIO_Pin_1      /* PD1: 正反转 */
 #define S_BRK_PIN               GPIO_Pin_5      /* PD5: 刹车 */
 #define S_SV_PIN                GPIO_Pin_0      /* PA0: 调速 (PWM/TIM5_CH1) */
 
-/* 大绞龙 (Big Auger) */
+/* 大绞龙 (Big Auger) -- 与旧版软件保持一致 */
 #define B_EN_PIN                GPIO_Pin_3      /* PA3: 使能 */
-#define B_FR_PIN                GPIO_Pin_9      /* PB9: 正反转 */
+#define B_FR_PIN                GPIO_Pin_2      /* PD2: 正反转 (旧版定义) */
 #define B_BRK_PIN               GPIO_Pin_6      /* PB6: 刹车 */
 #define B_SV_PIN                GPIO_Pin_1      /* PA1: 调速 (PWM/TIM2_CH2) */
 
@@ -93,6 +93,22 @@
 #define LED1_PIN                GPIO_Pin_10     /* PE10 */
 #define LED2_PIN                GPIO_Pin_11     /* PE11 */
 #define LED_GPIO                GPIOE
+
+/* ========================================================================
+   DAC7512 模拟输出引脚 (SPI1 + SPI3)
+   ======================================================================== */
+/* DAC1 (小绞龙) - SPI1 */
+#define DAC1_CS_PIN             GPIO_Pin_4      /* PA4: SYNC/CS */
+#define DAC1_SCLK_PIN           GPIO_Pin_5      /* PA5: SCLK */
+#define DAC1_MOSI_PIN           GPIO_Pin_7      /* PA7: DIN */
+#define DAC1_GPIO               GPIOA
+
+/* DAC2 (大绞龙) - SPI3 */
+#define DAC2_CS_PIN             GPIO_Pin_15     /* PA15: SYNC/CS */
+#define DAC2_SCLK_PIN           GPIO_Pin_3      /* PB3: SCLK */
+#define DAC2_MOSI_PIN           GPIO_Pin_5      /* PB5: DIN */
+#define DAC2_CS_GPIO            GPIOA
+#define DAC2_SPI_GPIO           GPIOB
 
 /* ========================================================================
    拨码开关输入 (Board ID 等)

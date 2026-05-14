@@ -63,7 +63,7 @@ brew install arm-none-eabi-gdb
 ```
 
 formula 版本不含完整 newlib 标准库，因此项目中通过以下方式适配：
-- 创建了最小化的 `Core/Inc/stdint.h` 和 `Core/Inc/stddef.h`
+- 创建了最小化的 `DemoCore/Inc/stdint.h` 和 `DemoCore/Inc/stddef.h`
 - 使用 `-nostdlib` 编译选项
 - 在 `syscalls.c` 中提供了 `__libc_init_array` 空实现
 - 显式链接 `libgcc.a` 处理编译器内部函数
@@ -79,7 +79,7 @@ brew install openocd
 
 ```
 STM32F103VET6_Project/
-├── Core/                          # 用户核心代码
+├── DemoCore/                          # 用户核心代码
 │   ├── Inc/                       # 头文件目录
 │   │   ├── stdint.h              # 最小化 stdint.h（适配无 newlib 环境）
 │   │   ├── stddef.h              # 最小化 stddef.h
@@ -311,7 +311,7 @@ arm-none-eabi-gdb build/STM32F103VET6_Demo.elf
 
 ### 问题 2: 缺少标准头文件
 **现象**: 编译报错 `stdint.h: No such file or directory`
-**解决**: 创建最小化的 `Core/Inc/stdint.h` 和 `Core/Inc/stddef.h`
+**解决**: 创建最小化的 `DemoCore/Inc/stdint.h` 和 `DemoCore/Inc/stddef.h`
 
 ### 问题 3: 链接器找不到 libc.a
 **现象**: `cannot find libc.a: Invalid argument`

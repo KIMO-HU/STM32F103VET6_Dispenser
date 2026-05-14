@@ -8,16 +8,20 @@
 
 #include "dispenser.h"
 #include "gpio_ctrl.h"
+#include "pwm_ctrl.h"
+#include "dac7512.h"
 #include "system_clock.h"
 #include "protocol_sac.h"
+#include "ads1256.h"
+#include "params_storage.h"
 
 /* 全局变量 */
 disp_params_t g_disp_params = {
     .target_weight     = 0,
     .current_weight    = 0,
-    .high_speed        = 0x06FF,
-    .mid_speed         = 0x05FF,
-    .low_speed         = 0x04FF,
+    .high_speed        = 0x0FFF,     /* 与旧版一致: 高速默认值 */
+    .mid_speed         = 0x07FF,     /* 与旧版一致: 中速默认值 */
+    .low_speed         = 0x04FF,     /* 与旧版一致: 低速默认值 */
     .speed_percent     = 50,
     .door_time         = 5,
     .timeout           = 255,
@@ -44,6 +48,8 @@ static uint32_t s_last_auger_check    = 0;
 static uint16_t s_last_weight         = 0;
 static uint8_t  s_door_is_open        = 0;
 static uint32_t s_door_open_time      = 0;
+static uint16_t s_complete_confirm_cnt = 0;   /* 完成确认计数器 (与旧版 MEDCINE_STEP4_TIMES 对应) */
+static uint8_t  s_timeout_need_resume = 0;    /* 超时后是否需要续药 */
 
 /**
   * @brief  初始化 dispenser
@@ -54,6 +60,9 @@ void DISPENSER_Init(void)
     g_dispense_cmd = 0;
     g_emergency_stop = 0;
 
+    /* 初始化 ADS1256 称重模块 */
+    ADS1256_Init();
+
     /* 所有电机停止 */
     MOTOR_DC1_Set(0, 0);
     MOTOR_DC2_Set(0, 0);
@@ -61,6 +70,12 @@ void DISPENSER_Init(void)
     MOTOR_DC4_Set(0, 0);
     AUGER_S_Set(0, 0, 1);  /* 小绞龙停止+刹车 */
     AUGER_B_Set(0, 0, 1);  /* 大绞龙停止+刹车 */
+
+    /* 尝试从 Flash 加载参数，失败则保留默认值 */
+    if (PARAMS_Load() != 0) {
+        /* 首次运行或 Flash 无效，保存默认参数 */
+        PARAMS_Save();
+    }
 }
 
 /**
@@ -106,49 +121,78 @@ void DISPENSER_Process(void)
     if (g_disp_status != DISP_IDLE) {
         uint32_t elapsed = sysTickCount - s_dispense_start_time;
 
-        /* 超时检测 */
+        /* 超时检测 -- 与旧版一致: 超时后回到 IDLE */
         if (elapsed > (uint32_t)g_disp_params.timeout * 1000) {
             DISPENSER_Stop();
-            g_disp_status = DISP_TIMEOUT;
-            return;
-        }
-
-        /* 读取当前重量 (此处为模拟/框架，实际应调用 ADS1256 驱动) */
-        g_disp_params.current_weight = DISPENSER_GetWeight();
-
-        /* 出药完成检测 */
-        if (g_disp_params.current_weight >= g_disp_params.target_weight) {
-            DISPENSER_Stop();
+            /* 续药逻辑: 如果未达到目标重量, 标记需要续药 */
+            uint16_t diff = (g_disp_params.target_weight > g_disp_params.current_weight)
+                            ? (g_disp_params.target_weight - g_disp_params.current_weight)
+                            : 0;
+            if (diff > g_disp_params.auger_weight_diff) {
+                /* 未达到目标重量, 标记需要续药 */
+                s_timeout_need_resume = 1;
+            } else {
+                s_timeout_need_resume = 0;
+            }
             g_disp_status = DISP_IDLE;
             return;
         }
 
-        /* 速度切换逻辑 (简化版) */
-        uint16_t remaining = g_disp_params.target_weight - g_disp_params.current_weight;
-        if (remaining <= g_disp_params.low_weight_thresh) {
+        /* 读取当前重量 */
+        g_disp_params.current_weight = DISPENSER_GetWeight();
+
+        /* 出药完成检测 -- 与旧版一致: 重量>=目标值持续10秒才确认完成 */
+        if (g_disp_params.current_weight >= g_disp_params.target_weight) {
+            s_complete_confirm_cnt++;
+            /* 旧版逻辑: MEDCINE_TIME>=10000ms 且持续10次(约10秒) */
+            if (s_complete_confirm_cnt >= 10) {
+                DISPENSER_Stop();
+                g_disp_status = DISP_IDLE;
+                s_complete_confirm_cnt = 0;
+                return;
+            }
+        } else {
+            s_complete_confirm_cnt = 0;  /* 重量回落, 重置计数器 */
+        }
+
+        /* 速度切换逻辑 -- 与旧版一致: 基于已出重量百分比 */
+        /* 旧版: <50%高速, 50%-75%中速, 75%-100%低速 */
+        uint16_t dispensed = g_disp_params.current_weight;
+        uint16_t target = g_disp_params.target_weight;
+        if (dispensed >= (target * 3 / 4)) {
+            /* 已出重量 >= 75% 目标值 -> 低速 (对应旧版 MEDCINE_STEP=1) */
             if (g_disp_status != DISP_LOW_SPEED) {
                 g_disp_status = DISP_LOW_SPEED;
-                /* 小绞龙低速运行 */
+                /* 小绞龙低速运行, 大绞龙停止 */
                 AUGER_S_Set(1, 0, 0);
+                DAC7512_Write(DAC_CH_SMALL_AUGER, g_disp_params.low_speed);
+                AUGER_B_Set(0, 0, 1);
+                DAC7512_SetZero(DAC_CH_BIG_AUGER);
             }
-        } else if (remaining <= (g_disp_params.target_weight * g_disp_params.speed_percent / 100)) {
+        } else if (dispensed >= (target / 2)) {
+            /* 已出重量 >= 50% 目标值 -> 中速 (对应旧版 MEDCINE_STEP=2) */
             if (g_disp_status != DISP_MID_SPEED) {
                 g_disp_status = DISP_MID_SPEED;
                 /* 大小绞龙中速运行 */
                 AUGER_S_Set(1, 0, 0);
+                DAC7512_Write(DAC_CH_SMALL_AUGER, g_disp_params.mid_speed);
                 AUGER_B_Set(1, 0, 0);
+                DAC7512_Write(DAC_CH_BIG_AUGER, g_disp_params.mid_speed);
             }
         } else {
+            /* 已出重量 < 50% -> 高速 (对应旧版 MEDCINE_STEP=3) */
             if (g_disp_status != DISP_HIGH_SPEED) {
                 g_disp_status = DISP_HIGH_SPEED;
                 /* 大小绞龙高速运行 */
                 AUGER_S_Set(1, 0, 0);
+                DAC7512_Write(DAC_CH_SMALL_AUGER, g_disp_params.high_speed);
                 AUGER_B_Set(1, 0, 0);
+                DAC7512_Write(DAC_CH_BIG_AUGER, g_disp_params.high_speed);
             }
         }
 
-        /* 防悬空电机周期性动作 (简化) */
-        if ((sysTickCount % 500) < 250) {
+        /* 防悬空电机周期性动作 -- 与旧版一致: 约5ms周期脉冲 */
+        if ((sysTickCount % 5) < 3) {
             MOTOR_DC1_Set(1, 0);
             MOTOR_DC2_Set(1, 0);
         } else {
@@ -159,9 +203,29 @@ void DISPENSER_Process(void)
 
     /* 料斗门自动关闭 */
     if (s_door_is_open) {
-        if ((sysTickCount - s_door_open_time) > (uint32_t)g_disp_params.door_time * 1000) {
+        uint32_t door_elapsed = sysTickCount - s_door_open_time;
+        /* 先按时间关闭 */
+        if (door_elapsed > (uint32_t)g_disp_params.door_time * 1000) {
             MOTOR_DC3_Set(0, 0);  /* 关门 */
+            /* 如有门到位传感器, 等待确认关到位 (最多额外等500ms) */
+            if (SENSOR_ReadDoor()) {
+                /* 门到位传感器有效 (有料=1/无料=1, 根据实际硬件确认) */
+                /* 当前仅依赖时间, 如需硬件确认可在此添加: */
+                /* if (door_elapsed > g_disp_params.door_time * 1000 + 500) s_door_is_open = 0; */
+            }
             s_door_is_open = 0;
+        }
+    }
+
+    /* 续药逻辑: 超时后如果药未出完, 自动重新启动 */
+    if (s_timeout_need_resume && (g_disp_status == DISP_IDLE)) {
+        s_timeout_need_resume = 0;
+        uint16_t remaining = (g_disp_params.target_weight > g_disp_params.current_weight)
+                             ? (g_disp_params.target_weight - g_disp_params.current_weight)
+                             : 0;
+        if (remaining > g_disp_params.auger_weight_diff) {
+            /* 自动重新启动出药, 继续出剩余的药量 */
+            DISPENSER_Start(remaining);
         }
     }
 }
@@ -178,16 +242,20 @@ void DISPENSER_Start(uint16_t weight)
     s_dispense_start_time = sysTickCount;
     s_last_auger_check = sysTickCount;
     s_last_weight = 0;
+    s_complete_confirm_cnt = 0;  /* 重置完成确认计数器 */
 
     /* 打开门 */
     MOTOR_DC3_Set(1, 0);
     s_door_is_open = 1;
     s_door_open_time = sysTickCount;
 
-    /* 启动大绞龙高速 */
+    /* 启动大绞龙高速, 设置 DAC 输出 */
     AUGER_B_Set(1, 0, 0);
-    /* 启动小绞龙 (颗粒型才需要，此处简化) */
+    DAC7512_Write(DAC_CH_BIG_AUGER, g_disp_params.high_speed);
+
+    /* 启动小绞龙, 设置 DAC 输出 */
     AUGER_S_Set(1, 0, 0);
+    DAC7512_Write(DAC_CH_SMALL_AUGER, g_disp_params.high_speed);
 }
 
 /**
@@ -201,6 +269,9 @@ void DISPENSER_Stop(void)
     MOTOR_DC4_Set(0, 0);
     AUGER_S_Set(0, 0, 1);
     AUGER_B_Set(0, 0, 1);
+
+    /* 关闭 DAC 输出 (模拟电压置 0) */
+    DAC7512_SetZeroAll();
 
     if (g_disp_status != DISP_TIMEOUT) {
         g_disp_status = DISP_IDLE;
@@ -266,23 +337,23 @@ uint8_t DISPENSER_GetStatusByte(void)
     /* 门状态: 0=开门, 1=关门 (协议规定) */
     if (!s_door_is_open) status |= 0x80;
 
-    /* 料位传感器: 有料=0, 无料=1 (协议规定) */
-    if (SENSOR_ReadHigh()) status |= 0x08;  /* 高位无料 */
-    if (SENSOR_ReadMid())  status |= 0x04;  /* 中位无料 */
-    if (SENSOR_ReadLow())  status |= 0x02;  /* 低位无料 */
-    if (SENSOR_ReadLow())  status |= 0x01;  /* 缺料 = 低位无料 */
+    /* 料位传感器: 有料=0, 无料=1 (协议规定)
+     * 协议定义: bit0=缺料, bit1=中位, bit2=高位, bit3=关门到位(未安装)
+     */
+    if (SENSOR_ReadHigh()) status |= 0x04;  /* bit2: 高位无料 */
+    if (SENSOR_ReadMid())  status |= 0x02;  /* bit1: 中位无料 */
+    if (SENSOR_ReadLow())  status |= 0x01;  /* bit0: 缺料/低位无料 */
+    /* bit3: 关门到位传感器，未安装，保持0 */
 
     return status;
 }
 
 /**
-  * @brief  获取当前重量 (框架函数，待接入 ADS1256 驱动)
+  * @brief  获取当前重量 (通过 ADS1256 读取)
   */
 uint16_t DISPENSER_GetWeight(void)
 {
-    /* TODO: 接入 ADS1256 24位ADC 读取称重传感器 */
-    /* 当前返回模拟值用于框架验证 */
-    return g_disp_params.current_weight;
+    return ADS1256_ReadWeight();
 }
 
 /**
@@ -323,16 +394,31 @@ void DISPENSER_SetParam(uint8_t param_type, uint8_t *data, uint16_t len)
         case CFG_LOW_WEIGHT_REQ:     /* 花草型低速阈值 */
             if (len >= 2) g_disp_params.low_weight_thresh = ((uint16_t)data[0] << 8) | data[1];
             break;
-        case CFG_WEIGHT_HIGN_REQ:    /* 标定高重量 */
-            if (len >= 2) g_disp_params.cali_high_weight = ((uint16_t)data[0] << 8) | data[1];
+        case CFG_WEIGHT_LOW_REQ: {   /* 标定零重量 (0x1D) */
+            if (len >= 2) {
+                g_disp_params.cali_zero_weight = ((uint16_t)data[0] << 8) | data[1];
+            }
+            /* 记录当前 ADC 原始值为零点 */
+            int32_t zero_adc = ADS1256_ReadRaw();
+            ADS1256_SetZeroCalibration(zero_adc);
             break;
-        case CFG_WEIGHT_LOW_REQ:     /* 标定零重量 */
-            if (len >= 2) g_disp_params.cali_zero_weight = ((uint16_t)data[0] << 8) | data[1];
+        }
+        case CFG_WEIGHT_HIGH_REQ: {  /* 标定高重量 (0x1C) */
+            if (len >= 2) {
+                g_disp_params.cali_high_weight = ((uint16_t)data[0] << 8) | data[1];
+            }
+            /* 记录当前 ADC 原始值为满量程点 */
+            int32_t full_adc = ADS1256_ReadRaw();
+            ADS1256_SetFullScaleCalibration(full_adc, g_disp_params.cali_high_weight);
             break;
+        }
         case STIR_SPEED_REQ:         /* 搅拌速度 */
             g_disp_params.stir_speed = data[0];
             break;
         default:
             break;
     }
+
+    /* 参数修改后自动保存到 Flash */
+    PARAMS_Save();
 }

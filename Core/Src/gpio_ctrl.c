@@ -83,17 +83,18 @@ void GPIO_Init_All(void)
     GPIOB->CRL |= (0x3 << (0 * 4)) | (0x3 << (1 * 4));
     GPIOB->BRR = GPIO_BRR_BR0 | GPIO_BRR_BR1;
 
-    /* DC4: PD14, PD15 */
-    GPIOD->CRH &= ~(GPIO_CRH_CNF14 | GPIO_CRH_MODE14 |
-                     GPIO_CRH_CNF15 | GPIO_CRH_MODE15);
-    GPIOD->CRH |= (0x3 << ((14 - 8) * 4)) | (0x3 << ((15 - 8) * 4));
-    GPIOD->BRR = GPIO_BRR_BR14 | GPIO_BRR_BR15;
+    /* DC4: PD8, PD9 -- 与旧版一致 */
+    GPIOD->CRH &= ~(GPIO_CRH_CNF8 | GPIO_CRH_MODE8 |
+                     GPIO_CRH_CNF9 | GPIO_CRH_MODE9);
+    GPIOD->CRH |= (0x3 << ((8 - 8) * 4)) | (0x3 << ((9 - 8) * 4));
+    GPIOD->BRR = GPIO_BRR_BR8 | GPIO_BRR_BR9;
 
-    /* 小绞龙: PA0(SV), PA2(EN) */
-    GPIOA->CRL &= ~(GPIO_CRL_CNF0 | GPIO_CRL_MODE0 |
-                     GPIO_CRL_CNF2 | GPIO_CRL_MODE2);
-    GPIOA->CRL |= (0x3 << (0 * 4)) | (0x3 << (2 * 4));
-    GPIOA->BRR = GPIO_BRR_BR0 | GPIO_BRR_BR2;
+    /* 小绞龙: PA0(SV=TIM5_CH1, 复用推挽), PA10(EN) */
+    GPIOA->CRL &= ~(GPIO_CRL_CNF0 | GPIO_CRL_MODE0);
+    GPIOA->CRL |= (0xB << (0 * 4));  /* PA0: AF push-pull 50MHz */
+    GPIOA->CRH &= ~(GPIO_CRH_CNF10 | GPIO_CRH_MODE10);
+    GPIOA->CRH |= (0x3 << ((10 - 8) * 4));  /* PA10: 推挽输出 50MHz */
+    GPIOA->BRR = GPIO_BRR_BR0 | GPIO_BRR_BR10;
 
     /* 小绞龙: PD1(F/R), PD5(BRK) */
     GPIOD->CRL &= ~(GPIO_CRL_CNF1 | GPIO_CRL_MODE1 |
@@ -101,19 +102,20 @@ void GPIO_Init_All(void)
     GPIOD->CRL |= (0x3 << (1 * 4)) | (0x3 << (5 * 4));
     GPIOD->BRR = GPIO_BRR_BR1 | GPIO_BRR_BR5;
 
-    /* 大绞龙: PA1(SV), PA3(EN) */
+    /* 大绞龙: PA1(SV=TIM2_CH2, 复用推挽), PA3(EN) */
     GPIOA->CRL &= ~(GPIO_CRL_CNF1 | GPIO_CRL_MODE1 |
                      GPIO_CRL_CNF3 | GPIO_CRL_MODE3);
-    GPIOA->CRL |= (0x3 << (1 * 4)) | (0x3 << (3 * 4));
+    GPIOA->CRL |= (0xB << (1 * 4)) | (0x3 << (3 * 4));  /* PA1: AF push-pull 50MHz */
     GPIOA->BRR = GPIO_BRR_BR1 | GPIO_BRR_BR3;
 
-    /* 大绞龙: PB6(BRK), PB9(F/R) */
+    /* 大绞龙: PB6(BRK), PD2(F/R) */
     GPIOB->CRL &= ~(GPIO_CRL_CNF6 | GPIO_CRL_MODE6);
     GPIOB->CRL |= (0x3 << (6 * 4));
-    GPIOB->CRH &= ~(GPIO_CRH_CNF9 | GPIO_CRH_MODE9);
-    GPIOB->CRH |= (0x3 << ((9 - 8) * 4));
-    GPIOB->BRR = GPIO_BRR_BR6 | GPIO_BRR_BR9;
+    GPIOB->BRR = GPIO_BRR_BR6;
     GPIOB->BSRR = GPIO_BSRR_BS6;  /* BRK 默认置位 (刹车) */
+    GPIOD->CRL &= ~(GPIO_CRL_CNF2 | GPIO_CRL_MODE2);
+    GPIOD->CRL |= (0x3 << (2 * 4));  /* PD2: 推挽输出 50MHz */
+    GPIOD->BRR = GPIO_BRR_BR2;
 
     /* ================================================================
        LED 输出
@@ -202,8 +204,8 @@ void MOTOR_DC3_Set(uint8_t in1, uint8_t in2)
 
 void MOTOR_DC4_Set(uint8_t in1, uint8_t in2)
 {
-    if (in1) GPIOD->BSRR = GPIO_BSRR_BS14; else GPIOD->BRR = GPIO_BRR_BR14;
-    if (in2) GPIOD->BSRR = GPIO_BSRR_BS15; else GPIOD->BRR = GPIO_BRR_BR15;
+    if (in1) GPIOD->BSRR = GPIO_BSRR_BS8;  else GPIOD->BRR = GPIO_BRR_BR8;
+    if (in2) GPIOD->BSRR = GPIO_BSRR_BS9;  else GPIOD->BRR = GPIO_BRR_BR9;
 }
 
 /* ================================================================
@@ -211,7 +213,7 @@ void MOTOR_DC4_Set(uint8_t in1, uint8_t in2)
    ================================================================ */
 void AUGER_S_Set(uint8_t en, uint8_t fr, uint8_t brk)
 {
-    if (en)  GPIOA->BSRR = GPIO_BSRR_BS2;  else GPIOA->BRR = GPIO_BRR_BR2;
+    if (en)  GPIOA->BSRR = GPIO_BSRR_BS10; else GPIOA->BRR = GPIO_BRR_BR10;
     if (fr)  GPIOD->BSRR = GPIO_BSRR_BS1;  else GPIOD->BRR = GPIO_BRR_BR1;
     if (brk) GPIOD->BSRR = GPIO_BSRR_BS5;  else GPIOD->BRR = GPIO_BRR_BR5;
 }
@@ -219,7 +221,7 @@ void AUGER_S_Set(uint8_t en, uint8_t fr, uint8_t brk)
 void AUGER_B_Set(uint8_t en, uint8_t fr, uint8_t brk)
 {
     if (en)  GPIOA->BSRR = GPIO_BSRR_BS3;  else GPIOA->BRR = GPIO_BRR_BR3;
-    if (fr)  GPIOB->BSRR = GPIO_BSRR_BS9;  else GPIOB->BRR = GPIO_BRR_BR9;
+    if (fr)  GPIOD->BSRR = GPIO_BSRR_BS2;  else GPIOD->BRR = GPIO_BRR_BR2;
     if (brk) GPIOB->BSRR = GPIO_BSRR_BS6;  else GPIOB->BRR = GPIO_BRR_BR6;
 }
 

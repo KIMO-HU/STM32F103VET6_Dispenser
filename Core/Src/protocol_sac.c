@@ -13,6 +13,7 @@
 #include "dispenser.h"
 #include "gpio_ctrl.h"
 #include "main.h"
+#include "iap_app.h"
 
 /* 接收状态机 */
 typedef enum {
@@ -136,7 +137,7 @@ void Protocol_ProcessCommand(uint8_t cmd_type, uint8_t *data, uint16_t len)
 
         /* ---------------- 设置类 ---------------- */
         case MEDCINE_START_REQ: {  /* 0x04: 单次出药 */
-            resp_type = MEDCIEN_START_RSP;
+            resp_type = MEDICINE_START_RSP;
             if (len >= 2) {
                 uint16_t weight = ((uint16_t)data[0] << 8) | data[1];
                 g_disp_params.target_weight = weight;
@@ -160,7 +161,7 @@ void Protocol_ProcessCommand(uint8_t cmd_type, uint8_t *data, uint16_t len)
         case CFG_AUGER_TIME_REQ:        /* 0x1E: 绞龙时间 */
         case CFG_AUGER_WEIGHT_REQ:      /* 0x1F: 绞龙差值 */
         case CFG_LOW_WEIGHT_REQ:        /* 0x22: 低速阈值 */
-        case CFG_WEIGHT_HIGN_REQ:       /* 0x1C: 标定高重 */
+        case CFG_WEIGHT_HIGH_REQ:       /* 0x1C: 标定高重 */
         case CFG_WEIGHT_LOW_REQ:        /* 0x1D: 标定零重 */
         case STIR_SPEED_REQ: {          /* 0x60: 搅拌速度 */
             DISPENSER_SetParam(cmd_type, data, len);
@@ -175,7 +176,7 @@ void Protocol_ProcessCommand(uint8_t cmd_type, uint8_t *data, uint16_t len)
             else if (cmd_type == CFG_AUGER_TIME_REQ) resp_type = CFG_AUGER_TIME_RSP;
             else if (cmd_type == CFG_AUGER_WEIGHT_REQ) resp_type = CFG_AUGER_WEIGHT_RSP;
             else if (cmd_type == CFG_LOW_WEIGHT_REQ) resp_type = CFG_LOW_WEIGHT_RSP;
-            else if (cmd_type == CFG_WEIGHT_HIGN_REQ) resp_type = CFG_WEIGHT_HIGN_RSP;
+            else if (cmd_type == CFG_WEIGHT_HIGH_REQ) resp_type = CFG_WEIGHT_HIGH_RSP;
             else if (cmd_type == CFG_WEIGHT_LOW_REQ) resp_type = CFG_WEIGHT_LOW_RSP;
             else if (cmd_type == STIR_SPEED_REQ) resp_type = STIR_SPEED_RSP;
             else resp_type = cmd_type + 0x80;
@@ -225,6 +226,49 @@ void Protocol_ProcessCommand(uint8_t cmd_type, uint8_t *data, uint16_t len)
         case SYS_HB_REQ: {  /* 0x5D: 心跳 */
             resp_type = SYS_HB_RSP;
             resp_subtype = SUC_NODATA;
+            break;
+        }
+
+        /* ---------------- IAP 升级 ---------------- */
+        case IAP_INTEGRAL_START_REQ:    /* 0x70: 全体进入升级 */
+        case IAP_SINGAL_UNIT_START_REQ: { /* 0x71: 单元机进入升级 */
+            if (cmd_type == IAP_INTEGRAL_START_REQ) {
+                resp_type = IAP_INTEGRAL_START_RSP;
+            } else {
+                resp_type = IAP_SINGAL_UNIT_START_RSP;
+            }
+            resp_subtype = SUC_NODATA;
+            /* 先发送响应，再触发 Bootloader */
+            Protocol_SendResponse(resp_type, resp_subtype, resp_data, resp_len);
+            delay_ms(100);
+            IAP_TriggerBootloader();
+            break;
+        }
+
+        case IAP_SINGAL_PACKEG_START_REQ:   /* 0x72 */
+        case IAP_SINGAL_PACKEG_REQ:         /* 0x73 */
+        case IAP_SIGNAL_PACKEG_END_REQ:     /* 0x74 */
+        case IAP_SINGAL_UNIT_END_REQ:       /* 0x75 */
+        case IAP_INTEGRAL_END_REQ: {        /* 0x76 */
+            /* App 不直接处理这些数据包，返回状态不匹配 */
+            resp_type = cmd_type + 0x80;
+            resp_subtype = FAILED;
+            resp_data[0] = CAUSE_STATE_MISMATCH;
+            resp_len = 1;
+            break;
+        }
+
+        case IAP_STATUS_INQUIRE_REQ: {      /* 0x77: 升级状态查询 */
+            resp_type = IAP_STATUS_INQUIRE_RSP;
+            resp_data[0] = 0x00;    /* 状态: 空闲 (不在升级模式) */
+            resp_data[1] = 0x00;    /* 已接收包数高 */
+            resp_data[2] = 0x00;    /* 已接收包数低 */
+            resp_data[3] = 0x00;    /* 已接收字节数 */
+            resp_data[4] = 0x00;
+            resp_data[5] = 0x00;
+            resp_data[6] = 0x00;
+            resp_len = 7;
+            resp_subtype = SUC_HAVEDATA;
             break;
         }
 
